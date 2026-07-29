@@ -1,0 +1,22 @@
+{
+	// Use IntelliSense to learn about possible attributes.
+	// Hover to view descriptions of existing attributes.
+	// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Silksong Debug",
+			"type": "coreclr",
+			"request": "launch",
+			"preLaunchTask": "dotnet: build",
+			"program": "D:/Game/SteamLibrary/steamapps/common/Hollow Knight Silksong/Hollow Knight Silksong.exe",
+			"args": [
+				"--doorstop-enabled", 
+				"true", 
+				"--doorstop-target-assembly", "C:/Users/carri/AppData/Roaming/r2modmanPlus-local/HollowKnightSilksong/profiles/dev/BepInEx/core/BepInEx.Preloader.dll"
+			],
+			"stopAtEntry": false,
+			"console": "internalConsole",
+		}
+	]
+}
