@@ -2,8 +2,8 @@
 
 Show every needolin message all at once.
 
-![](screenshots/1.png)
-![](screenshots/2.png)
+![](https://github.com/user-attachments/assets/510e0228-4027-4685-8865-df1accf0e029)
+![](https://github.com/user-attachments/assets/174e1963-1112-474c-8b61-1df555665612)
 
 ## Install
 
