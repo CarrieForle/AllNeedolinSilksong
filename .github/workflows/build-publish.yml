@@ -166,7 +166,9 @@ jobs:
         display_name: AllNeedolin
         description: Unzip to BepinEx plugins folder
         version: ${{ needs.build.outputs.version }}
-        file_category: main
+        update_mod_version: true
+        show_requirements_pop_up: true
+        primary_mod_manager_download: true
 
   # Publish to GitHub releases to keep release history on the repository (needed for this workflow to work properly
   # but is also nice for multiple other reasons such as auto-tagging *after* a build success)
