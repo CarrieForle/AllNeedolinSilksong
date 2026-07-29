@@ -1,0 +1,213 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      force_thunderstore:
+        description: Force re-publishing to Thunderstore
+        required: true
+        default: false
+        type: boolean
+      force_nexus:
+        description: Force re-publishing to Nexus
+        required: true
+        default: false
+        type: boolean
+    
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      attestation-url: ${{ steps.attest.outputs.attestation-url }}
+      # when you are ready to publish your first release, change this to 'true'
+      allow-release: false
+      is-new-version: ${{ !fromJSON(steps.needs-release.outputs.exists || 'true') }}
+      thunderstore-artifact-id: ${{ steps.thunderstore-artifact.outputs.artifact-id }}
+      nexus-artifact-id: ${{ steps.nexus-artifact.outputs.artifact-id }}
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 10.x
+    - name: Build
+      run: dotnet build -c Release --verbosity normal
+    - name: Pack
+      run: dotnet pack
+    - name: Get Version
+      id: version
+      run: |-
+        VERSION=$(dotnet build AllNeedolin -getProperty:Version)
+        echo Version is $VERSION
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+    - name: Upload thunderstore artifact
+      id: thunderstore-artifact
+      uses: actions/upload-artifact@v7
+      with:
+        path: AllNeedolin/thunderstore/dist/*.zip
+        archive: false
+        if-no-files-found: error
+    - name: Upload nexus artifact
+      id: nexus-artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: CarrieForle-AllNeedolin.zip
+        path: AllNeedolin/thunderstore/temp/*
+    - name: Check if release needed
+      id: needs-release
+      uses: mukunku/tag-exists-action@v1.7.0
+      if: github.event_name == 'push'
+      with:
+        tag: v${{ steps.version.outputs.version }}
+    - name: Generate attestation
+      id: attest
+      uses: actions/attest@v4
+      if: github.event_name == 'push' && steps.needs-release.outputs.exists == 'false'
+      with:
+        subject-path: |
+          AllNeedolin/thunderstore/dist/*.zip
+          AllNeedolin/bin/**/*.nupkg
+
+  # Publish to Thunderstore to that users can install it
+  release-thunderstore:
+    needs:
+      - build
+      - secret-check
+    runs-on: ubuntu-latest
+    # thunderstore doesn't support prerelease versions in semver so if it was used we need to skip publishing
+    if: |
+      needs.secret-check.outputs.has-thunderstore-secret == 'true' &&
+      !contains(needs.build.outputs.version, '-') &&
+      (
+        (
+          github.event_name == 'push' &&
+          needs.build.outputs.allow-release == 'true' &&
+          needs.build.outputs.is-new-version == 'true'
+        ) ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.force_thunderstore == 'true'
+        )
+      )
+    # Do not substitute your Thunderstore API key in this workflow! Instead, add a secret to your repository.
+    # https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets
+    env:
+      THUNDERSTORE_API_KEY: ${{ secrets.THUNDERSTORE_API_KEY }}
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 9.x
+    - name: Restore tools
+      run: dotnet tool restore
+    - name: Download artifact
+      uses: actions/download-artifact@v8
+      with:
+        artifact-ids: ${{ needs.build.outputs.thunderstore-artifact-id }}
+        path: thunderstore/dist
+        skip-decompress: true
+    - name: Publish to Thunderstore
+      run: |-
+        dotnet tcli publish \
+          --config-path AllNeedolin/thunderstore/thunderstore.toml \
+          --file thunderstore/dist/*.zip \
+          --token $THUNDERSTORE_API_KEY
+
+  release-nexus:
+    runs-on: windows-latest
+    needs:
+      - build
+      - secret-check
+    env: 
+      BUILD_DIR: myMod
+    if: |
+      needs.secret-check.outputs.has-nexus-secret == 'true' && 
+      (
+        (
+          github.event_name == 'push' && 
+          needs.build.outputs.allow-release == 'true' && 
+          needs.build.outputs.is-new-version == 'true'
+        ) ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.force_nexus == 'true'
+        )
+      )
+    steps:
+    # This has to be first because it cleans current directory
+    - uses: actions/checkout@v7
+      with:
+        sparse-checkout: package-nexus.ps1
+        sparse-checkout-cone-mode: false
+    - name: Download artifact
+      uses: actions/download-artifact@v8
+      with:
+        artifact-ids: ${{ needs.build.outputs.nexus-artifact-id }}
+        skip-decompress: true
+    - name: Upload to NexusMods
+      uses: Nexus-Mods/upload-action@v1.0.0-beta.10
+      with:
+        api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+        file_id: ${{ secrets.NEXUSMODS_GROUP }}
+        filename: CarrieForle-AllNeedolin.zip
+        display_name: AllNeedolin
+        description: Includes just this mod. You need to install dependencies manually.
+        version: ${{ needs.build.outputs.version }}
+        file_category: main
+    - run: 7z x *.zip -o${{ env.BUILD_DIR }}
+    - name: Upload to NexusMods (all in one)
+      uses: Nexus-Mods/upload-action@v1.0.0-beta.10
+      with:
+        api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+        file_id: ${{ secrets.NEXUSMODS_GROUP_ALL_IN_ONE }}
+        filename: bin/nexus/CarrieForle-AllNeedolin.zip
+        display_name: AllNeedolin all in one
+        description: Included this mod and the dependencies. Just unzip and drag and drop into BepinEx folder.
+        version: ${{ needs.build.outputs.version }}
+        file_category: main
+
+  # Publish to GitHub releases to keep release history on the repository (needed for this workflow to work properly
+  # but is also nice for multiple other reasons such as auto-tagging *after* a build success)
+  release-github:
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && needs.build.outputs.allow-release == 'true' && needs.build.outputs.is-new-version == 'true'
+
+    steps:
+    - name: Download artifact
+      uses: actions/download-artifact@v8
+      with:
+        artifact-ids: ${{ needs.build.outputs.nexus-artifact-id }}
+        skip-decompress: true
+    - name: Release
+      uses: softprops/action-gh-release@v3
+      with:
+        draft: false
+        fail_on_unmatched_files: true
+        tag_name: v${{ needs.build.outputs.version }}
+        body: |
+          Build attested at ${{ needs.build.outputs.attestation-url }}
+        files: |
+          *.zip
+
+  secret-check:
+    runs-on: ubuntu-latest
+    outputs:
+      has-thunderstore-secret: ${{ secrets.THUNDERSTORE_API_KEY != '' }}
+      has-nexus-secret: ${{ secrets.NEXUSMODS_API_KEY != '' }}
+    steps:
+      - run: echo no-op
